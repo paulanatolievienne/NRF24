@@ -1,0 +1,70 @@
+#include <Arduino.h>
+#include <SPI.h>
+#include <RF24.h>
+
+const int SW3 = A6;
+const int SEUIL_BOUTON = 512;
+const int BUZZER = 10;
+const uint8_t CANAL_RADIO = 76;  // Canal radio utilise pour les paquets de test.
+const byte ADRESSE_RADIO[6] = "SW3A1";  // Adresse du destinataire des paquets.
+const unsigned long INTERVALLE_TRANSMISSION_MS = 10;  // Delai minimum entre deux paquets.
+const unsigned long ANTI_REBOND_MS = 30;
+
+RF24 radio(7, 8);  // Initialise le NRF24 avec CE sur D7 et CSN sur D8.
+
+bool emissionActive = false;
+bool dernierEtatLu = false;
+bool etatBoutonStable = false;
+unsigned long changementEtatBouton = 0;
+unsigned long derniereTransmission = 0;
+
+void setup() {
+  Serial.begin(9600);
+
+  // D10 est le SS matériel du SPI et doit rester configuré en sortie.
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+
+  if (!radio.begin()) {
+    Serial.println("Erreur : NRF24 non detecte");
+    while (true) {
+      delay(1000);
+    }
+  }
+  digitalWrite(BUZZER, LOW);
+
+  radio.setChannel(CANAL_RADIO);  // Choisit le canal radio pour les transmissions.
+  radio.setPALevel(RF24_PA_MAX);  // Regle la puissance d'emission au maximum.
+  radio.setDataRate(RF24_2MBPS);  // Regle le debit radio a 2 Mbit/s.
+  radio.setAutoAck(false);  // Desactive l'attente d'un accuse de reception.
+  radio.openWritingPipe(ADRESSE_RADIO);  // Configure l'adresse d'envoi des paquets.
+  radio.stopListening();  // Place le NRF24 en mode emetteur.
+
+  Serial.println("Systeme pret - SW3 active/desactive les paquets de test");
+}
+
+void loop() {
+  bool nouvelEtat = analogRead(SW3) < SEUIL_BOUTON;
+
+  if (nouvelEtat != dernierEtatLu) {
+    dernierEtatLu = nouvelEtat;
+    changementEtatBouton = millis();
+  }
+
+  if (millis() - changementEtatBouton >= ANTI_REBOND_MS &&
+      nouvelEtat != etatBoutonStable) {
+    etatBoutonStable = nouvelEtat;
+    if (etatBoutonStable) {
+      emissionActive = !emissionActive;  // Un appui active ou arrete l'envoi periodique.
+      Serial.println(emissionActive ? "Transmission de test activee" : "Transmission arretee");
+    }
+  }
+
+  // N'envoie un paquet que si le mode est actif et que le delai est ecoule.
+  if (emissionActive && millis() - derniereTransmission >= INTERVALLE_TRANSMISSION_MS) {
+    const char message[] = "Test NRF24";  // Donnees contenues dans le paquet transmis.
+    radio.write(&message, sizeof(message));  // Envoie le paquet avec les reglages du NRF24.
+    derniereTransmission = millis();  // Enregistre l'heure pour espacer les envois.
+    Serial.println("Paquet de test transmis a puissance maximale");  // Affiche une confirmation de tentative.
+  }
+}
